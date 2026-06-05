@@ -68,14 +68,26 @@ async def listar_salas(
 @router.get("/salas/{sala_id}/mensajes", response_model=list[MensajeResponse])
 async def historial_mensajes(
     sala_id: str,
+    antes_de: str | None = None,
+    limite: int = 50,
     db: AsyncIOMotorDatabase = Depends(get_db),
     usuario: dict = Depends(get_current_user),
 ):
     sala = await db.salas_chat.find_one({"_id": ObjectId(sala_id), "miembros": usuario["id"]})
     if not sala:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Sala no encontrada")
-    docs = await db.mensajes.find({"sala_id": sala_id}).sort("created_at", 1).to_list(length=200)
-    return [_mensaje_a_response(d) for d in docs]
+
+    filtro: dict = {"sala_id": sala_id}
+    if antes_de:
+        try:
+            filtro["_id"] = {"$lt": ObjectId(antes_de)}
+        except Exception:
+            pass
+
+    limite = min(max(limite, 1), 100)
+    # Obtener los N más recientes, luego invertir para mostrar cronológicamente
+    docs = await db.mensajes.find(filtro).sort("_id", -1).limit(limite).to_list(length=limite)
+    return [_mensaje_a_response(d) for d in reversed(docs)]
 
 
 @router.get("/salas/{sala_id}/miembros", response_model=list[UsuarioResponse])
