@@ -7,7 +7,7 @@ from fastapi import UploadFile, HTTPException, status
 _UPLOADS_BASE = Path("uploads")
 _MAX_DIM = 1200
 _JPEG_QUALITY = 75
-_MAX_TAMANO_MB = 10
+_MAX_TAMANO_MB = 50
 
 
 def _directorio_usuario(usuario_id: str) -> Path:
@@ -20,7 +20,7 @@ async def guardar_imagen(archivo: UploadFile, usuario_id: str) -> str:
     contenido = await archivo.read()
 
     if len(contenido) > _MAX_TAMANO_MB * 1024 * 1024:
-        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="Imagen demasiado grande (máx 10MB)")
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="Imagen demasiado grande (máx 50MB)")
 
     # Detectar HEIC/HEIF (fotos de iPhone) — Pillow no los soporta sin librería extra
     if contenido[:12] in (b'\x00\x00\x00\x18ftypheic', b'\x00\x00\x00\x1cftypheic') or \
@@ -68,7 +68,7 @@ async def guardar_archivo(archivo: UploadFile, usuario_id: str) -> tuple[str, st
     tamano = len(contenido)
 
     if tamano > _MAX_TAMANO_MB * 1024 * 1024:
-        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="Archivo demasiado grande (máx 10MB)")
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="Archivo demasiado grande (máx 50MB)")
 
     extension = Path(archivo.filename or "archivo").suffix
     nombre = f"{uuid.uuid4()}{extension}"
