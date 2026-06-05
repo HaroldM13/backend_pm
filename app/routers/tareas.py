@@ -89,6 +89,26 @@ async def listar_tareas(
     return [_tarea_a_response(d) for d in docs]
 
 
+@router.get("/{tarea_id}", response_model=TareaResponse)
+async def obtener_tarea(
+    tarea_id: str,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+    usuario: dict = Depends(get_current_user),
+):
+    from fastapi import HTTPException
+    try:
+        doc = await db.tareas.find_one({"_id": ObjectId(tarea_id)})
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tarea no encontrada")
+    if not doc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tarea no encontrada")
+    # Verificar que el usuario sea miembro del proyecto
+    proyecto = await db.proyectos.find_one({"_id": ObjectId(doc["proyecto_id"]), "miembros": usuario["id"]})
+    if not proyecto:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sin acceso")
+    return _tarea_a_response(doc)
+
+
 @router.post("/", response_model=TareaResponse, status_code=status.HTTP_201_CREATED)
 async def crear_tarea(
     datos: CrearTareaRequest,

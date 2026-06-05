@@ -273,6 +273,126 @@ async def enviar_archivo(
     return payload
 
 
+# ─── Alerta de tarea próxima a vencer ────────────────────────────────────────
+
+@router.post("/alerta-tarea/{tarea_id}", status_code=200)
+async def alerta_tarea(
+    tarea_id: str,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+    usuario: dict = Depends(get_current_user),
+):
+    try:
+        tarea = await db.tareas.find_one({"_id": ObjectId(tarea_id)})
+    except Exception:
+        raise HTTPException(status_code=404, detail="Tarea no encontrada")
+    if not tarea:
+        raise HTTPException(status_code=404, detail="Tarea no encontrada")
+
+    proyecto = await db.proyectos.find_one({"_id": ObjectId(tarea["proyecto_id"]), "miembros": usuario["id"]})
+    if not proyecto:
+        raise HTTPException(status_code=403, detail="Sin acceso")
+
+    prioridad = tarea.get("prioridad", "media")
+    vencimiento = tarea.get("fecha_vencimiento", "sin fecha")
+    emoji = "🔴" if prioridad == "critica" else "🟠" if prioridad == "alta" else "🟡"
+    contenido = (
+        f"{emoji} **Alerta de vencimiento**: La tarea **{tarea['titulo']}** vence el {vencimiento}. "
+        f"Prioridad: {prioridad}. Por favor, atiéndela a tiempo."
+    )
+
+    ahora = datetime.now(timezone.utc)
+
+    # Si tiene asignado → DM con esa persona; si no → canal del proyecto
+    asignado_id = tarea.get("asignado_a")
+    if asignado_id:
+        # Buscar o crear DM
+        sala = await db.salas_chat.find_one({
+            "tipo": "directo",
+            "miembros": {"$all": [usuario["id"], asignado_id], "$size": 2},
+        })
+        if not sala:
+            asignado = await db.usuarios.find_one({"_id": ObjectId(asignado_id)})
+            yo = await db.usuarios.find_one({"_id": ObjectId(usuario["id"])})
+            nombre_sala = f"{yo['nombre']} · {asignado['nombre']}" if asignado and yo else "DM"
+            doc_sala = {
+                "nombre": nombre_sala,
+                "tipo": "directo",
+                "miembros": [usuario["id"], asignado_id],
+                "created_at": ahora,
+            }
+            res_sala = await db.salas_chat.insert_one(doc_sala)
+            sala_id = str(res_sala.inserted_id)
+        else:
+            sala_id = str(sala["_id"])
+    else:
+        if not proyecto.get("chat_grupo_id"):
+            raise HTTPException(status_code=400, detail="El proyecto no tiene canal de chat")
+        sala_id = proyecto["chat_grupo_id"]
+
+    doc_msg = {
+        "sala_id": sala_id,
+        "remitente_id": usuario["id"],
+        "nombre_remitente": usuario["nombre"],
+        "contenido": contenido,
+        "subtipo": "texto",
+        "menciones": [asignado_id] if asignado_id else [],
+        "created_at": ahora,
+    }
+    resultado = await db.mensajes.insert_one(doc_msg)
+    payload = {
+        "id": str(resultado.inserted_id),
+        "sala_id": sala_id,
+        "remitente_id": usuario["id"],
+        "nombre_remitente": usuario["nombre"],
+        "contenido": contenido,
+        "subtipo": "texto",
+        "menciones": [asignado_id] if asignado_id else [],
+        "created_at": ahora.isoformat(),
+    }
+    await manager.broadcast(sala_id, payload)
+    return {"ok": True, "sala_id": sala_id, "asignado": bool(asignado_id)}
+
+
+# ─── Mensajes no leídos ────────────────────────────────────────────────────────
+
+@router.get("/no-leidos")
+async def no_leidos(
+    db: AsyncIOMotorDatabase = Depends(get_db),
+    usuario: dict = Depends(get_current_user),
+):
+    uid = usuario["id"]
+    salas = await db.salas_chat.find({"miembros": uid}).to_list(length=200)
+    total = 0
+    por_sala: dict[str, int] = {}
+    for sala in salas:
+        sala_id = str(sala["_id"])
+        lectura = await db.ultima_lectura.find_one({"usuario_id": uid, "sala_id": sala_id})
+        filtro: dict = {"sala_id": sala_id, "remitente_id": {"$ne": uid}}
+        if lectura:
+            filtro["created_at"] = {"$gt": lectura["timestamp"]}
+        count = await db.mensajes.count_documents(filtro)
+        if count > 0:
+            por_sala[sala_id] = count
+            total += count
+    return {"total": total, "por_sala": por_sala}
+
+
+@router.post("/salas/{sala_id}/leer", status_code=200)
+async def marcar_leida(
+    sala_id: str,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+    usuario: dict = Depends(get_current_user),
+):
+    uid = usuario["id"]
+    ahora = datetime.now(timezone.utc)
+    await db.ultima_lectura.update_one(
+        {"usuario_id": uid, "sala_id": sala_id},
+        {"$set": {"timestamp": ahora}},
+        upsert=True,
+    )
+    return {"ok": True}
+
+
 # ─── WebSocket ────────────────────────────────────────────────────────────────
 
 @router.websocket("/ws/{sala_id}")

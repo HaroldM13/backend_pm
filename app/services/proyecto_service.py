@@ -4,6 +4,7 @@ from fastapi import HTTPException, status
 from bson import ObjectId
 from ..models.proyecto import CrearProyectoRequest, ActualizarProyectoRequest, ProyectoResponse, ColumnaCustom, GestionarColumnasRequest
 from ..utils.helpers import fecha_a_str
+from ..websocket.manager import manager
 
 
 def _proyecto_a_response(doc: dict) -> ProyectoResponse:
@@ -207,4 +208,33 @@ async def agregar_miembro(
         pass  # No bloquear si el área falla — el proyecto ya fue actualizado
 
     doc["miembros"].append(nuevo_id)
+
+    # Bienvenida en el canal del proyecto
+    if doc.get("chat_grupo_id"):
+        try:
+            ahora = datetime.now(timezone.utc)
+            msg = f"👋 **{nuevo['nombre']}** se ha unido al proyecto. ¡Bienvenido/a al equipo!"
+            doc_msg = {
+                "sala_id": doc["chat_grupo_id"],
+                "remitente_id": "sistema",
+                "nombre_remitente": "Sistema",
+                "contenido": msg,
+                "subtipo": "texto",
+                "menciones": [],
+                "created_at": ahora,
+            }
+            resultado_msg = await db.mensajes.insert_one(doc_msg)
+            await manager.broadcast(doc["chat_grupo_id"], {
+                "id": str(resultado_msg.inserted_id),
+                "sala_id": doc["chat_grupo_id"],
+                "remitente_id": "sistema",
+                "nombre_remitente": "Sistema",
+                "contenido": msg,
+                "subtipo": "texto",
+                "menciones": [],
+                "created_at": ahora.isoformat(),
+            })
+        except Exception:
+            pass
+
     return _proyecto_a_response(doc)

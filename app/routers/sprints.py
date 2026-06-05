@@ -147,6 +147,33 @@ async def completar_sprint(
     await db.proyectos.update_one({"_id": ObjectId(doc["proyecto_id"])}, {"$set": {"sprint_activo_id": None}})
     doc["estado"] = "completado"
 
+    # Notificar en el canal del proyecto
+    proyecto = await db.proyectos.find_one({"_id": ObjectId(doc["proyecto_id"])})
+    if proyecto and proyecto.get("chat_grupo_id"):
+        ahora = datetime.now(timezone.utc)
+        total = await db.tareas.count_documents({"sprint_id": sprint_id})
+        msg = f"🏁 Sprint **{doc['nombre']}** completado — {total} tarea(s) entregadas. ¡Buen trabajo!"
+        doc_msg = {
+            "sala_id": proyecto["chat_grupo_id"],
+            "remitente_id": "sistema",
+            "nombre_remitente": "Sistema",
+            "contenido": msg,
+            "subtipo": "texto",
+            "menciones": [],
+            "created_at": ahora,
+        }
+        resultado_msg = await db.mensajes.insert_one(doc_msg)
+        await manager.broadcast(proyecto["chat_grupo_id"], {
+            "id": str(resultado_msg.inserted_id),
+            "sala_id": proyecto["chat_grupo_id"],
+            "remitente_id": "sistema",
+            "nombre_remitente": "Sistema",
+            "contenido": msg,
+            "subtipo": "texto",
+            "menciones": [],
+            "created_at": fecha_a_str(ahora),
+        })
+
     return _sprint_a_response(doc)
 
 
