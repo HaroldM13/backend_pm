@@ -22,13 +22,30 @@ async def guardar_imagen(archivo: UploadFile, usuario_id: str) -> str:
     if len(contenido) > _MAX_TAMANO_MB * 1024 * 1024:
         raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="Imagen demasiado grande (máx 10MB)")
 
+    # Detectar HEIC/HEIF (fotos de iPhone) — Pillow no los soporta sin librería extra
+    if contenido[:12] in (b'\x00\x00\x00\x18ftypheic', b'\x00\x00\x00\x1cftypheic') or \
+       (len(contenido) > 12 and contenido[4:12] in (b'ftypheic', b'ftypheix', b'ftypmif1', b'ftypmsf1')):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Formato HEIC no soportado. Por favor convierte la imagen a JPEG o PNG antes de enviar."
+        )
+
     try:
         imagen = Image.open(io.BytesIO(contenido))
     except Exception:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Archivo no válido como imagen")
 
-    # Convertir a RGB para guardar como JPEG sin errores con RGBA/P
-    if imagen.mode not in ("RGB", "L"):
+    # Convertir a RGB para guardar como JPEG (JPEG no soporta transparencia)
+    if imagen.mode == "RGBA":
+        fondo = Image.new("RGB", imagen.size, (255, 255, 255))
+        fondo.paste(imagen, mask=imagen.split()[3])
+        imagen = fondo
+    elif imagen.mode == "P":
+        imagen = imagen.convert("RGBA")
+        fondo = Image.new("RGB", imagen.size, (255, 255, 255))
+        fondo.paste(imagen, mask=imagen.split()[3])
+        imagen = fondo
+    elif imagen.mode not in ("RGB", "L"):
         imagen = imagen.convert("RGB")
 
     # Reducir si supera el límite sin distorsionar proporción
